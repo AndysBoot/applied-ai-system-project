@@ -9,7 +9,7 @@ You will implement the functions in recommender.py:
 - recommend_songs
 """
 
-from recommender import load_songs, recommend_songs
+from src.recommender import load_songs, recommend_songs
 
 
 def main() -> None:
@@ -44,28 +44,35 @@ def main() -> None:
         "negative_genres": ["metal"],      # explicitly avoid
     }
 
-    recommendations = recommend_songs(user_prefs, songs, k=5)
+    result = recommend_songs(user_prefs, songs, k=5)
+
+    if result.warnings:
+        print("\n" + "="*70)
+        print("GUARDRAIL WARNINGS")
+        print("="*70)
+        for warning in result.warnings:
+            print(f"  ! {warning}")
 
     print("\n" + "="*70)
     print("TOP 5 MUSIC RECOMMENDATIONS")
     print("="*70)
 
-    for idx, rec in enumerate(recommendations, 1):
+    for idx, rec in enumerate(result.items, 1):
         song, score, explanation, reasons = rec
 
         # Song header
         print(f"\n{idx}. {song['title']}")
         print(f"   Artist: {song['artist']} | Genre: {song['genre']} | Mood: {song['mood']}")
 
-        # Score with visual bar
-        bar_length = int(score / 12 * 30)  # Scale to 30-char bar (max score ~12)
-        bar = "█" * bar_length + "░" * (30 - bar_length)
+        # Score with visual bar (ASCII-only so it renders on any terminal encoding)
+        bar_length = max(0, min(30, int(score / 12 * 30)))  # Scale to 30-char bar (max score ~12)
+        bar = "#" * bar_length + "-" * (30 - bar_length)
         print(f"   Score: {score:.2f}/12.0 [{bar}]")
 
         # Detailed reasons
         print(f"   Why matched:")
         for reason in reasons:
-            print(f"     • {reason}")
+            print(f"     - {reason}")
 
         print("-" * 70)
 
