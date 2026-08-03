@@ -1,3 +1,4 @@
-pandas
 pytest
+anthropic
+python-dotenv
 streamlit
