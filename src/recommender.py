@@ -1,8 +1,12 @@
 from typing import List, Dict, Tuple, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import csv
-import os
+import logging
 from pathlib import Path
+
+from guardrails import validate_profile
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class Song:
