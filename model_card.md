@@ -24,9 +24,16 @@ The model works based off the following scoring system:
 3) Checks if the song is within your tolerance
     - Is the song close enough to your energy, valence, or dnceability?
     - If so, add the full feature score
-    - If not, add only hald the intended feature score
+    - **Update:** originally, if it wasn't within tolerance we'd add only half the intended
+      feature score straight away -- a hard cliff. That's fixed now (see Future Work item 1):
+      the score decays smoothly the further out of tolerance a song is, instead of instantly
+      dropping to half.
 4) Acoustic bonus is given if the song is very acoustic(>0.7) and if you like acoustic music
 5) We then sort all songs by their total score nd return the top 5
+6) **New:** before any of this runs, a guardrail layer (`src/guardrails.py`) checks the
+   profile itself for contradictions or degenerate settings (see section 10)
+7) **New:** each recommended song also gets an AI-generated explanation grounded in its own
+   data, with a deterministic fallback if no API key is set (see section 10)
 ---
 
 ## 4. Data  
@@ -68,12 +75,24 @@ Finally, some bugs that surprised me were the acoustic bonus, overriding targets
 ## 8. Future Work  
 
 Here are some fixes for the future
-1) Smooth tolerance bands instead of cliifs
-    - Use a gradual penalty that decreases smoothly rather then completely falling off
+1) ~~Smooth tolerance bands instead of cliifs~~ **DONE.** `_tolerance_band_score()` in
+   `src/recommender.py` now decays linearly from full score at the tolerance boundary down to
+   a floor at twice the tolerance, instead of instantly falling off.
 2) Make acoustic a feature, not a bonus
     - Let users set a acoustic bonus rather then giving it a flat out +2.0 bonus.
-3) Validate and fix contradictions
-    - One way this can be fixed is by offering suggestions to users so they can adjust their preferences.
+    - Still open -- the guardrail layer (section 10) now at least *warns* when
+      `likes_acoustic=True` conflicts with a high energy target, but the scoring itself still
+      treats acoustic as a flat bonus rather than a weighted feature.
+3) ~~Validate and fix contradictions~~ **DONE, via warnings rather than auto-fixing.**
+   `src/guardrails.py`'s `validate_profile()` detects contradictory/degenerate profiles
+   (zero weights, conflicting energy/mood, overly strict tolerance, the acoustic/energy
+   paradox, negative-genre lists that would empty the catalog) and logs/surfaces warnings.
+   It deliberately does not auto-adjust the user's preferences -- the original idea of
+   "offering suggestions" is still open future work if the warnings should also propose a
+   fix instead of just describing the problem.
+4) New: extend `validate_profile()` to catch genre/mood pairings that are rare in the actual
+   catalog (not just the fixed thresholds it uses today), now that section 10's guardrail
+   layer exists to build on.
 ---
 
 ## 9. Personal Reflection  
@@ -83,3 +102,33 @@ Creating a scoring system that recommends songs to users wasn't complicated, but
 
 It goes to show how much time and consideration is put into modern music recommendation algorithms like spotify and etc.
 I 
+
+---
+
+## 10. Applied AI System Extensions
+
+This model card originally covered a pure rule-based scorer. Two features were added on top of
+it, both fully wired into `recommend_songs()`/`main.py`/`app.py` rather than standalone scripts:
+
+**Guardrail / reliability layer** (`src/guardrails.py`) -- runs before scoring, on every call.
+Checks the profile itself (not the catalog) for: all feature weights zero, high energy target
+paired with low valence target, any tolerance band under 0.08, `likes_acoustic` paired with a
+very high energy target, and a `negative_genres` list covering most of the catalog's genres. It
+warns rather than blocks -- a bad profile still gets a recommendation, just an explainable one.
+`tests/test_adversarial.py` turns the 8 profiles in `src/adversarial_profiles.py` into an
+automated regression suite that asserts these warnings actually fire where expected, and that
+the recommender never crashes or returns malformed scores for any of them.
+
+**RAG explanation layer** (`src/explain.py`) -- retrieves the recommended song's own attributes
+plus up to 3 catalog songs sharing its genre or mood, and asks Claude to write a short
+explanation grounded only in that retrieved data (explicitly told not to invent facts). Falls
+back to the original deterministic reason string if no API key is configured or the call fails,
+so the system's core behavior (and its testability) doesn't depend on an external API being
+available.
+
+**Bug found while wiring these in:** `score_song` had been reading a generic `tolerance` key
+that no profile actually sets -- every profile (including the adversarial ones) sets
+`energy_tolerance`/`valence_tolerance`/`danceability_tolerance` instead. That means every
+profile's per-feature tolerance had silently been a no-op since this project started; fixing it
+changed the default profile's top-5 ranking. A good reminder that a "working" demo can still have
+dead config fields that never actually influenced behavior.
