@@ -1,15 +1,26 @@
 """
 Command line runner for the Music Recommender Simulation.
 
-This file helps you quickly run and test your recommender.
-
-You will implement the functions in recommender.py:
-- load_songs
-- score_song
-- recommend_songs
+Loads the catalog, scores it against a user profile (through the guardrail
+and smoothed-tolerance scoring in recommender.py), and prints ranked
+recommendations with both a deterministic reason breakdown and a
+RAG-generated natural language explanation (src/explain.py).
 """
 
+import logging
+import os
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv is optional; ANTHROPIC_API_KEY can also be set directly in the environment
+
 from src.recommender import load_songs, recommend_songs
+from src.explain import generate_explanation
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+logger = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -44,6 +55,11 @@ def main() -> None:
         "negative_genres": ["metal"],      # explicitly avoid
     }
 
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        logger.info("ANTHROPIC_API_KEY detected -- explanations will use the RAG/Claude path")
+    else:
+        logger.info("No ANTHROPIC_API_KEY set -- explanations will use the deterministic fallback")
+
     result = recommend_songs(user_prefs, songs, k=5)
 
     if result.warnings:
@@ -69,10 +85,15 @@ def main() -> None:
         bar = "#" * bar_length + "-" * (30 - bar_length)
         print(f"   Score: {score:.2f}/12.0 [{bar}]")
 
-        # Detailed reasons
+        # Detailed reasons (deterministic, always available)
         print(f"   Why matched:")
         for reason in reasons:
             print(f"     - {reason}")
+
+        # AI explanation (RAG over the catalog when a key is configured, else
+        # the same deterministic reasons rendered as prose)
+        ai_explanation = generate_explanation(user_prefs, song, score, reasons, songs)
+        print(f"   AI Explanation: {ai_explanation}")
 
         print("-" * 70)
 
