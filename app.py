@@ -5,20 +5,13 @@ Run with: streamlit run app.py
 
 This is a thin UI layer over the exact same pipeline the CLI (src/main.py)
 uses -- src.recommender.recommend_songs() (guardrails + smoothed scoring)
-and src.explain.generate_explanation() (RAG over the catalog, with a
-deterministic fallback). No recommendation logic lives in this file.
+and src.explain.generate_explanations_batch() (smart template-based explanations).
+No recommendation logic lives in this file.
 """
 
 import logging
-import os
 
 import streamlit as st
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass  # python-dotenv is optional; ANTHROPIC_API_KEY can also be set directly in the environment
 
 from src.recommender import load_songs_smart, recommend_songs
 from src.explain import generate_explanations_batch
@@ -45,25 +38,15 @@ def main() -> None:
     st.title("🎵 Music Recommender")
     st.caption(
         "Rule-based scoring with a guardrail layer that flags contradictory "
-        "preferences, plus an optional Claude-generated explanation grounded "
-        "in the catalog."
+        "preferences, plus smart AI-generated explanations for why songs match your taste."
     )
 
     with st.sidebar:
-        st.header("Claude API key (optional)")
-        key_input = st.text_input(
-            "ANTHROPIC_API_KEY",
-            type="password",
-            help="Kept in memory for this session only, never written to disk. "
-            "Leave blank to use the deterministic explanation instead of live Claude calls.",
+        st.header("ℹ️ About explanations")
+        st.info(
+            "Explanations are generated using smart templates that analyze why each song "
+            "matches your taste—no API keys needed. This keeps your data private."
         )
-        if key_input:
-            os.environ["ANTHROPIC_API_KEY"] = key_input
-
-        if os.environ.get("ANTHROPIC_API_KEY"):
-            st.success("RAG explanations active")
-        else:
-            st.info("No key set — explanations will use the deterministic fallback")
 
     with st.form("preferences"):
         st.subheader("Your taste profile")
@@ -135,7 +118,8 @@ def main() -> None:
 
     st.subheader(f"Top {len(result.items)} recommendations")
 
-    # All explanations for this result set are generated in a single Claude call.
+    # All explanations for this result set are generated via smart templates
+    # (no external API call -- see src/explain.py).
     explain_items = [(song, score, reasons) for song, score, _, reasons in result.items]
     with st.spinner("Generating explanations..."):
         ai_explanations = generate_explanations_batch(user_prefs, explain_items, songs)

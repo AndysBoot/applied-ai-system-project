@@ -4,18 +4,11 @@ Command line runner for the Music Recommender Simulation.
 Loads the catalog, scores it against a user profile (through the guardrail
 and smoothed-tolerance scoring in recommender.py), and prints ranked
 recommendations with both a deterministic reason breakdown and a
-RAG-generated natural language explanation (src/explain.py).
+smart template-based natural language explanation (src/explain.py).
 """
 
 import logging
-import os
 import sys
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass  # python-dotenv is optional; ANTHROPIC_API_KEY can also be set directly in the environment
 
 from src.recommender import load_songs_smart, recommend_songs
 from src.explain import generate_explanations_batch
@@ -60,10 +53,7 @@ def main() -> None:
         "negative_genres": ["metal"],      # explicitly avoid
     }
 
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        logger.info("ANTHROPIC_API_KEY detected -- explanations will use the RAG/Claude path")
-    else:
-        logger.info("No ANTHROPIC_API_KEY set -- explanations will use the deterministic fallback")
+    logger.info("Generating explanations using smart templates (no API keys needed)")
 
     result = recommend_songs(user_prefs, songs, k=5)
 
@@ -78,9 +68,8 @@ def main() -> None:
     print("TOP 5 MUSIC RECOMMENDATIONS")
     print("="*70)
 
-    # AI explanations for the whole list are generated in a single Claude call
-    # (RAG over the catalog when a key is configured, else the same
-    # deterministic reasons rendered as prose for each song).
+    # AI explanations for the whole list are generated via smart templates
+    # that render each song's deterministic reasons as natural-language prose.
     explain_items = [(song, score, reasons) for song, score, _, reasons in result.items]
     ai_explanations = generate_explanations_batch(user_prefs, explain_items, songs)
 

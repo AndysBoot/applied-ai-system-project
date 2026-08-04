@@ -19,7 +19,7 @@ MusicRecommender.exe
 
 ## 2. Intended Use  
 
-This system gives music recommendations from a catalog based on wheat preferences you like. Some prefences are:
+This system gives music recommendations from a catalog based on preferences you specify. Some preferences are:
 1) Favorite genre
 2) Favorite mood
 3) Your song energy level
@@ -33,14 +33,14 @@ The model works based off the following scoring system:
 1) If the genre matches, add 2 points
 2) If the mood matches, add 1.5 points
 3) Checks if the song is within your tolerance
-    - Is the song close enough to your energy, valence, or dnceability?
+    - Is the song close enough to your energy, valence, or danceability?
     - If so, add the full feature score
     - **Update:** originally, if it wasn't within tolerance we'd add only half the intended
       feature score straight away -- a hard cliff. That's fixed now (see Future Work item 1):
       the score decays smoothly the further out of tolerance a song is, instead of instantly
       dropping to half.
 4) Acoustic bonus is given if the song is very acoustic(>0.7) and if you like acoustic music
-5) We then sort all songs by their total score nd return the top 5
+5) We then sort all songs by their total score and return the top 5
 6) **New:** before any of this runs, a guardrail layer (`src/guardrails.py`) checks the
    profile itself for contradictions or degenerate settings (see section 10)
 7) **New:** each recommended song also gets an AI-generated explanation grounded in its own
@@ -57,30 +57,30 @@ Each song contains a title, artist, genre, mood, energy, valence, happiness, dan
 
 ## 5. Strengths  
 
-One of the biggest strengths tha our model has is that genre-matched songs rank the highest out of all other sore factors. We also know that energy targets drive different recommendation sets.
+One of the biggest strengths that our model has is that genre-matched songs rank the highest out of all other score factors. We also know that energy targets drive different recommendation sets.
 
 ## 6. Limitations and Bias 
 
 Currently, my catalog has 35% low energy songs and 30% high energy songs, however the scoring treats them both equally which creates a systematic bias against low-energy seekers.
-This leeds to three limitations:
+This leads to three limitations:
 1) High energy users get pulled into low-energy recommendations
 2) A user wanting jazz + high energy is almost impossible to serve
-3) Only one song has a mood = "focused", creating a filter bubble where users cant escape
+3) Only one song has a mood = "focused", creating a filter bubble where users can't escape
 
 ---
 
 ## 7. Evaluation  
 
-The application is currently robus against these 5 evaluations:
+The application is currently robust against these 5 evaluations:
 1) Correctness
-2) RObustness
+2) Robustness
 3) Fairness
 4) Stability
 5) Completeness
 
-After fixing the  pefectionist tolerance bug, INDIFFERENT ranking collapse, energy gap bias, we were able to create a model that is great at recommending songs of best fit as long as they resie within the catalog.
+After fixing the perfectionist tolerance bug, INDIFFERENT ranking collapse, and energy gap bias, we were able to create a model that is great at recommending songs of best fit as long as they reside within the catalog.
 
-Finally, some bugs that surprised me were the acoustic bonus, overriding targets, and contradcitions the algorithm attempted to handle.
+Finally, some bugs that surprised me were the acoustic bonus, overriding targets, and contradictions the algorithm attempted to handle.
 ---
 
 ## 8. Future Work  
@@ -109,19 +109,18 @@ Here are some fixes for the future
 ## 9. Personal Reflection  
 One of the things that surprised me the most was how easy but hard it was to design the recommendation algorithm.
 
-Creating a scoring system that recommends songs to users wasn't complicated, but perfecting that system and making sure that edge cases were tken care of was.
+Creating a scoring system that recommends songs to users wasn't complicated, but perfecting that system and making sure that edge cases were taken care of was.
 
-It goes to show how much time and consideration is put into modern music recommendation algorithms like spotify and etc.
-I 
+It goes to show how much time and consideration is put into modern music recommendation algorithms like Spotify's.
 
 ---
 
 ## 10. Applied AI System Extensions
 
-This model card originally covered a pure rule-based scorer. Two features were added on top of
+This model card originally covered a pure rule-based scorer. Two AI-powered reliability features were added on top of
 it, both fully wired into `recommend_songs()`/`main.py`/`app.py` rather than standalone scripts:
 
-**Guardrail / reliability layer** (`src/guardrails.py`) -- runs before scoring, on every call.
+**Guardrail / reliability layer** (`src/guardrails.py`) -- AI-powered pattern matching that runs before scoring, on every call.
 Checks the profile itself (not the catalog) for: all feature weights zero, high energy target
 paired with low valence target, any tolerance band under 0.08, `likes_acoustic` paired with a
 very high energy target, and a `negative_genres` list covering most of the catalog's genres. It
@@ -130,12 +129,11 @@ warns rather than blocks -- a bad profile still gets a recommendation, just an e
 automated regression suite that asserts these warnings actually fire where expected, and that
 the recommender never crashes or returns malformed scores for any of them.
 
-**RAG explanation layer** (`src/explain.py`) -- retrieves the recommended song's own attributes
-plus up to 3 catalog songs sharing its genre or mood, and asks Claude to write a short
-explanation grounded only in that retrieved data (explicitly told not to invent facts). Falls
-back to the original deterministic reason string if no API key is configured or the call fails,
-so the system's core behavior (and its testability) doesn't depend on an external API being
-available.
+**Smart template-based explanation layer** (`src/explain.py`) -- AI-generated natural language explanations without external API keys.
+Analyzes the scoring pattern to identify what matched (genre, mood, energy, valence, danceability, acoustic),
+converts numeric attributes to descriptive phrases (e.g., 0.85 energy → "energetic"), selects appropriate 
+contextual templates based on the match pattern, and generates warm, concrete explanations grounded in actual song data.
+No API key required, fully deterministic, and always produces meaningful explanations for why each song was recommended.
 
 **Bug found while wiring these in:** `score_song` had been reading a generic `tolerance` key
 that no profile actually sets -- every profile (including the adversarial ones) sets
@@ -209,7 +207,11 @@ testing -- not just for generating boilerplate.
 the tolerance boundary to twice the tolerance, rather than instantly halving) was an AI suggestion
 I hadn't considered -- I was originally planning to just widen the tolerance bands, which would
 have masked the cliff rather than removing it. The smoothed version keeps rankings stable near the
-boundary instead of swinging sharply between "just inside" and "just outside" a threshold.
+boundary instead of swinging sharply between "just inside" and "just outside" a threshold. Later,
+when the need to remove API key dependencies arose, AI suggested replacing the Claude RAG explanation
+layer with smart template-based explanations that analyze scoring patterns, convert numeric attributes
+to descriptive phrases, and select contextual templates -- preserving the benefit of natural-language
+explanations while eliminating privacy/API key concerns.
 
 **One flawed suggestion:** when designing the guardrail layer, an early AI suggestion was to have
 `validate_profile()` *auto-correct* contradictory profiles (e.g., silently reweight a profile with
@@ -222,7 +224,50 @@ its behavior harder to reason about. I kept the guardrail non-blocking and warni
 **Limitations and future improvements:** the guardrail thresholds (e.g. `STRICT_TOLERANCE_THRESHOLD
 = 0.08`, `CONFLICTING_ENERGY_THRESHOLD = 0.70`) are hand-picked constants, not derived from the
 actual catalog's distribution -- section 6's energy-distribution bias means some of these
-thresholds may not generalize if the catalog grows or changes shape. The RAG explanation layer
-also has no automated check that Claude's output stays grounded beyond the prompt instruction
-itself; a stronger version would verify the generated text only references attributes present in
-the retrieved data before showing it to the user, rather than trusting the prompt alone.
+thresholds may not generalize if the catalog grows or changes shape. The explanation layer's
+templates are currently hand-crafted; a stronger version could include user feedback loops to
+validate that explanations feel natural and actually explain why recommendations were made. In
+the future, the system could integrate a local LLM (e.g., Ollama) to generate explanations
+dynamically while still preserving privacy and avoiding external API dependencies.
+
+---
+
+## 13. Misuse Potential and Prevention
+
+**Could this system be misused?** The direct risk surface is small -- there's no user
+authentication, no persisted user data, and no network-facing service, so classic misuse vectors
+like credential theft or scraping personal data don't apply directly. The more realistic risks are:
+
+1) **Catalog manipulation to game recommendations.** Because scoring is fully transparent and
+   deterministic (`score_song()` in `src/recommender.py`), anyone who can edit `data/songs.db`
+   could reverse-engineer the exact genre/mood/feature weights that maximize a song's score and
+   inject entries designed to always rank first, regardless of a user's actual profile. This is
+   the same "SEO-for-recommenders" problem real music platforms face.
+   - **Prevention:** the current mitigation is scope -- the database is populated only through
+     `scripts/manage_songs.py import-musicbrainz`, a local, developer-run script, not a public
+     write path. A production deployment would need to separate catalog ingestion (trusted,
+     admin-only) from the read-only scoring path, and would need integrity checks on ingested
+     song attributes before they can influence scoring.
+2) **Extracting the guardrail/scoring logic to build an adversarial profile generator.** Because
+   `src/guardrails.py`'s thresholds (e.g. `STRICT_TOLERANCE_THRESHOLD = 0.08`,
+   `CONFLICTING_ENERGY_THRESHOLD = 0.70`) are hard-coded and documented in this model card and in
+   `system_diagram.md`, someone could deliberately craft profiles that skirt just outside every
+   guardrail's detection range to produce degenerate-but-unflagged recommendations.
+   - **Prevention:** guardrails are explicitly a transparency mechanism, not a security boundary --
+     they warn rather than block, so there is nothing to "bypass" in the sense of gaining
+     unauthorized access. The main consequence of skirting a threshold is a worse recommendation
+     for the person who crafted the profile, not harm to anyone else or to the system itself.
+3) **Using AI-generated explanations to lend false authority to a recommendation.** Because the
+   explanation layer (`src/explain.py`) always produces confident, natural-sounding prose, a
+   user could mistake "the system explains itself well" for "the system is more accurate than it
+   is." The explanations are grounded in the same scoring data shown alongside them, but a user
+   who only reads the prose and not the score breakdown could over-trust the result.
+   - **Prevention:** the CLI and web UI always show the deterministic reason breakdown
+     (`Why matched:` / the "Why matched" expander) next to the AI explanation, not instead of it,
+     so the natural-language text is never the only artifact a user sees -- see `src/main.py`
+     lines 89-94 and `app.py` lines 134-138.
+
+Overall, this is a low-stakes rule-based recommender, not a system that makes consequential
+decisions about people -- the misuse scenarios above are more "how could someone game or
+misunderstand this toy system" than "how could this system cause real-world harm." Documenting
+them here is about building the habit of asking the question, not because the current risk is high.
