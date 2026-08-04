@@ -21,50 +21,6 @@ class RecommendationResult:
     warnings: List[str] = field(default_factory=list)
 
 
-@dataclass
-class Song:
-    """
-    Represents a song and its attributes.
-    Required by tests/test_recommender.py
-    """
-    id: int
-    title: str
-    artist: str
-    genre: str
-    mood: str
-    energy: float
-    tempo_bpm: float
-    valence: float
-    danceability: float
-    acousticness: float
-
-@dataclass
-class UserProfile:
-    """
-    Represents a user's taste preferences.
-    Required by tests/test_recommender.py
-    """
-    favorite_genre: str
-    favorite_mood: str
-    target_energy: float
-    likes_acoustic: bool
-
-class Recommender:
-    """
-    OOP implementation of the recommendation logic.
-    Required by tests/test_recommender.py
-    """
-    def __init__(self, songs: List[Song]):
-        self.songs = songs
-
-    def recommend(self, user: UserProfile, k: int = 5) -> List[Song]:
-        # TODO: Implement recommendation logic
-        return self.songs[:k]
-
-    def explain_recommendation(self, user: UserProfile, song: Song) -> str:
-        # TODO: Implement explanation logic
-        return "Explanation placeholder"
-
 def load_songs(csv_path: str) -> List[Dict]:
     """
     Loads songs from a CSV file.
@@ -88,13 +44,42 @@ def load_songs(csv_path: str) -> List[Dict]:
                 'genre': row['genre'],
                 'mood': row['mood'],
                 'energy': float(row['energy']),
-                'tempo_bpm': float(row['tempo_bpm']),
                 'valence': float(row['valence']),
                 'danceability': float(row['danceability']),
                 'acousticness': float(row['acousticness'])
             }
             songs.append(song)
     return songs
+
+
+def load_songs_smart(csv_path: str = "data/songs.csv") -> List[Dict]:
+    """
+    Loads the song catalog from the SQLite database (data/songs.db) ONLY.
+
+    Deliberately does NOT seed or fall back to csv_path -- data/songs.csv is a
+    small fabricated example catalog, and callers that want real songs need
+    the database populated from a real source first (see
+    scripts/manage_songs.py import-musicbrainz). csv_path is accepted so
+    callers can report which CSV they'd otherwise have used, but it is never
+    read here.
+
+    Raises RuntimeError if the database has no songs in it yet, with
+    instructions for how to populate it, instead of silently substituting
+    fabricated data.
+    """
+    from src.db import DB_PATH, init_db, load_songs_from_db
+
+    init_db()
+    songs = load_songs_from_db()
+    if not songs:
+        raise RuntimeError(
+            f"{DB_PATH} has no songs yet. Populate it first, e.g.:\n"
+            "  python scripts/manage_songs.py import-musicbrainz rock --limit 25\n"
+            "  python scripts/manage_songs.py add \"Title\" \"Artist\" genre mood energy tempo_bpm valence danceability acousticness\n"
+            f"(Not falling back to {csv_path} -- that's fabricated example data.)"
+        )
+    return songs
+
 
 def _tolerance_band_score(weight: float, base_value: float, diff: float, tolerance: float) -> float:
     """Score a numerical feature with a smoothed tolerance band instead of a hard cliff.

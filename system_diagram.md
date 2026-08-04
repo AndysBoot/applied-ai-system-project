@@ -7,8 +7,9 @@ checks the whole pipeline.
 ```mermaid
 flowchart TD
     A1["User profile<br/>favorite_genre, mood, energy/valence/dance targets,<br/>tolerance bands, feature_weights, negative_genres"]
-    A2["Song catalog<br/>data/songs.csv"]
+    A2["Song catalog<br/>data/songs.db (SQLite)<br/>populated via scripts/manage_songs.py<br/>from the MusicBrainz API (real songs)"]
     A3["Adversarial profiles<br/>src/adversarial_profiles.py<br/>(8 edge-case profiles)"]
+    A4["data/songs.csv<br/>fixed fabricated catalog --<br/>used ONLY by tests/ for<br/>reproducible regression checks,<br/>never by the live app"]
 
     subgraph GUARD["Guardrail layer — src/guardrails.py"]
         B1["validate_profile()"]
@@ -16,15 +17,15 @@ flowchart TD
     end
 
     subgraph CORE["Recommendation engine — src/recommender.py"]
-        C1["load_songs()"]
+        C1["load_songs_smart()<br/>reads data/songs.db only --<br/>errors instead of silently<br/>using the fabricated songs.csv"]
         C2["score_song()<br/>smoothed tolerance scoring"]
         C3["recommend_songs()<br/>rank, filter, fallback if pool empty"]
     end
 
     subgraph RAG["RAG explanation layer — src/explain.py"]
-        D1["Retriever<br/>pull top song's full record +<br/>genre/mood-matched comparison songs"]
+        D1["Retriever<br/>pull each recommended song's full record +<br/>genre/mood-matched comparison songs"]
         D2{"ANTHROPIC_API_KEY set<br/>and call succeeds?"}
-        D3["Claude generates grounded<br/>1-2 sentence explanation"]
+        D3["Single batched Claude call<br/>returns one grounded explanation<br/>per recommended song (not per-call)"]
         D4["Fallback: deterministic<br/>templated reason string"]
     end
 
@@ -63,7 +64,7 @@ flowchart TD
     B2 --> E4
 
     A3 --> F2
-    A2 --> F1
+    A4 --> F1
     C3 --> F3
     F1 --> F3
     F2 --> F3
@@ -82,7 +83,7 @@ flowchart TD
 |---|---|
 | **Guardrail layer** (`guardrails.py`) | Validates a user profile *before* scoring — catches contradictions and degenerate inputs (zero weights, overly strict tolerance, energy/mood mismatches, genre filters that would empty the catalog) and logs warnings instead of crashing. |
 | **Recommendation engine** (`recommender.py`) | Loads the catalog, scores each song against the profile with smoothed tolerance bands, ranks and filters, and falls back to an unfiltered pool if a hard filter would return nothing. |
-| **RAG explanation layer** (`explain.py`) | Retrieves the recommended song's full attributes plus similar catalog songs, then asks Claude to generate a short explanation grounded only in that retrieved data — never invents facts. Falls back to the deterministic reason string if no API key is set or the call fails. |
+| **RAG explanation layer** (`explain.py`) | Retrieves each recommended song's full attributes plus similar catalog songs, then makes ONE batched Claude call for the whole result set (not one call per song) asking it to generate short explanations grounded only in that retrieved data — never invents facts. Falls back to the deterministic reason string per song if no API key is set or the call fails/doesn't parse. |
 | **Automated testing** (`tests/`) | `test_adversarial.py` runs all 8 adversarial profiles through the full pipeline on every `pytest` run, asserting the guardrails and scoring behave correctly under edge cases — this is the system checking itself, continuously. |
 | **Human-in-the-loop** | A developer reads guardrail warnings and test failures (`model_card.md` documents this history), spot-checks AI-generated explanations for hallucination or tone issues, and tunes thresholds/weights based on what the automated layer surfaces. Humans supervise and adjust; they don't approve every individual recommendation. |
 

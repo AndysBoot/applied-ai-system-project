@@ -20,8 +20,8 @@ try:
 except ImportError:
     pass  # python-dotenv is optional; ANTHROPIC_API_KEY can also be set directly in the environment
 
-from src.recommender import load_songs, recommend_songs
-from src.explain import generate_explanation
+from src.recommender import load_songs_smart, recommend_songs
+from src.explain import generate_explanations_batch
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 
@@ -30,11 +30,15 @@ st.set_page_config(page_title="Music Recommender", page_icon="🎵", layout="cen
 
 @st.cache_data
 def get_catalog():
-    return load_songs("data/songs.csv")
+    return load_songs_smart("data/songs.csv")
 
 
 def main() -> None:
-    songs = get_catalog()
+    try:
+        songs = get_catalog()
+    except RuntimeError as e:
+        st.error(str(e))
+        return
     genres = sorted({song["genre"] for song in songs})
     moods = sorted({song["mood"] for song in songs})
 
@@ -131,7 +135,14 @@ def main() -> None:
 
     st.subheader(f"Top {len(result.items)} recommendations")
 
-    for idx, (song, score, explanation, reasons) in enumerate(result.items, 1):
+    # All explanations for this result set are generated in a single Claude call.
+    explain_items = [(song, score, reasons) for song, score, _, reasons in result.items]
+    with st.spinner("Generating explanations..."):
+        ai_explanations = generate_explanations_batch(user_prefs, explain_items, songs)
+
+    for idx, ((song, score, explanation, reasons), ai_explanation) in enumerate(
+        zip(result.items, ai_explanations), 1
+    ):
         with st.container(border=True):
             st.markdown(f"**{idx}. {song['title']}** — {song['artist']}")
             st.caption(f"Genre: {song['genre']} | Mood: {song['mood']}")
@@ -141,8 +152,6 @@ def main() -> None:
                 for reason in reasons:
                     st.write(f"- {reason}")
 
-            with st.spinner("Generating explanation..."):
-                ai_explanation = generate_explanation(user_prefs, song, score, reasons, songs)
             st.markdown(f"_{ai_explanation}_")
 
 

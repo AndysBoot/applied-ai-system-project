@@ -6,6 +6,17 @@ MusicRecommender.exe
 
 ---
 
+> **Note on catalog evolution:** the concrete evaluation runs below (section 8/9) were captured
+> against the original fixed 17-song `data/songs.csv` catalog, which is still used as-is by
+> `tests/` for reproducible regression checks. The live app (`src/main.py`, `app.py`) no longer
+> reads that CSV -- it loads exclusively from `data/songs.db`, a SQLite catalog populated with
+> real songs from the MusicBrainz API (see `src/musicbrainz.py`,
+> `scripts/manage_songs.py import-musicbrainz`). Title/artist/genre for those songs are real;
+> MusicBrainz has no audio-analysis data, so mood/energy/valence/danceability/acousticness/tempo
+> are rough, documented genre-level estimates rather than measured values. The specific numbers
+> and song names below (catalog size 17, "Dusty Roads", etc.) describe that original test
+> fixture, not the live catalog's current contents.
+
 ## 2. Intended Use  
 
 This system gives music recommendations from a catalog based on wheat preferences you like. Some prefences are:
@@ -132,3 +143,86 @@ that no profile actually sets -- every profile (including the adversarial ones) 
 profile's per-feature tolerance had silently been a no-op since this project started; fixing it
 changed the default profile's top-5 ranking. A good reminder that a "working" demo can still have
 dead config fields that never actually influenced behavior.
+
+**Dead code found and removed:** `src/recommender.py` also carried a second, unused
+implementation -- a `Song`/`UserProfile`/`Recommender` class trio with `# TODO: Implement`
+stubs (`recommend()` just returned `self.songs[:k]` unsorted; `explain_recommendation()`
+returned a hardcoded placeholder string). `tests/test_recommender.py` was testing *that* stub,
+not the real dict-based `score_song()`/`recommend_songs()` pipeline that `main.py` and `app.py`
+actually call -- so the "baseline" tests were passing without ever exercising real scoring logic.
+Both were removed/rewritten: the stub classes are gone, and `test_recommender.py` now runs the
+three baseline profiles from `src/test_profiles.py` through the real pipeline (genre/mood match
+on the top result, negative-genre exclusion, low-energy vs. high-energy ranking).
+
+---
+
+## 11. Guardrail Behavior — Input / Behavior / Result Examples
+
+Concrete runs of `recommend_songs()` against the real 17-song catalog, showing what each
+adversarial profile actually triggers (not just what it's designed to test for).
+
+**PERFECTIONIST** -- `energy_tolerance`/`valence_tolerance`/`danceability_tolerance` all `0.05`
+- **Input:** favorite_genre="indie", favorite_mood="happy", tolerance bands of 0.05 on all three numerical features
+- **Behavior:** guardrail fires three separate "very strict" warnings (one per feature); scoring still runs the smoothed tolerance curve rather than a hard cliff
+- **Result:** still returns all 5 requested songs (top: "Dusty Roads") -- the guardrail *warns* that results may be sparse, but the smoothed scoring means a small catalog doesn't actually run dry the way a hard-cliff score would
+
+**NO_FEATURES** -- all `feature_weights` set to `0.0`
+- **Input:** favorite_genre="indie pop", favorite_mood="happy", every numerical feature weight zero
+- **Behavior:** guardrail fires "all numerical feature weights are zero" warning
+- **Result:** 5 songs still returned (top: "Rooftop Lights"), ranking driven entirely by genre/mood bonuses since no numerical feature can differentiate songs -- exactly the degenerate-but-not-broken behavior the guardrail is meant to flag
+
+**CONFLICTING_EMOTIONS** -- `target_energy=0.90`, `target_valence=0.20`
+- **Input:** favorite_genre="rock", favorite_mood="melancholic", high energy target paired with low valence target
+- **Behavior:** guardrail fires the "uncommon emotional combination" warning
+- **Result:** 5 songs returned (top: "Storm Runner", a high-energy/low-valence rock track) -- the system still finds a sensible top match here because the catalog happens to contain that combination, but the warning correctly flags that this pairing is atypical and may not always be servable
+
+**ACOUSTIC_PARADOX** -- `likes_acoustic=True`, `target_energy=0.95`
+- **Input:** favorite_genre="folk", favorite_mood="happy", wants acoustic songs *and* very high energy
+- **Behavior:** guardrail fires the acoustic/energy paradox warning
+- **Result:** 5 songs returned (top: "Sunrise City", a non-acoustic pop track) -- the acoustic bonus never actually applies to the top pick because no high-acousticness song in the catalog also hits the energy target, which is exactly the conflict the warning describes
+
+**Negative-genre catalog wipeout** -- `negative_genres` set to every genre in the catalog
+- **Input:** a profile whose `negative_genres` list equals the full set of genres present in `data/songs.csv`
+- **Behavior:** the hard filter would exclude all 17 songs; `recommend_songs()` detects the empty pool and falls back to the unfiltered catalog, logging an additional guardrail warning ("excluded every song in the catalog")
+- **Result:** 5 songs still returned instead of an empty list -- covered directly by `tests/test_negative_genres_wiping_out_catalog_falls_back_instead_of_returning_nothing` in `tests/test_adversarial.py`
+
+---
+
+## 12. Reflection on AI Collaboration and System Design
+
+This project was built with Claude Code as an active collaborator across design, debugging, and
+testing -- not just for generating boilerplate.
+
+**How AI was used:**
+- **Design:** talked through how to fix the tolerance-band "cliff" (full score, then an instant
+  drop to half) into something smoother, before implementing `_tolerance_band_score()`'s linear
+  decay in `src/recommender.py`.
+- **Debugging:** AI-assisted tracing of `score_song()` surfaced that it was reading a `tolerance`
+  key no profile ever sets, instead of the `energy_tolerance`/`valence_tolerance`/
+  `danceability_tolerance` keys every profile actually uses -- a silent no-op bug present since
+  the original Module 3 version (see section 10).
+- **Testing:** used AI to turn the `src/adversarial_profiles.py` cases -- originally a
+  print-and-eyeball script -- into the automated `tests/test_adversarial.py` regression suite,
+  and to audit `tests/test_recommender.py` for whether it was actually testing the real pipeline.
+
+**One helpful suggestion:** the linear-decay tolerance smoothing (score falls off gradually from
+the tolerance boundary to twice the tolerance, rather than instantly halving) was an AI suggestion
+I hadn't considered -- I was originally planning to just widen the tolerance bands, which would
+have masked the cliff rather than removing it. The smoothed version keeps rankings stable near the
+boundary instead of swinging sharply between "just inside" and "just outside" a threshold.
+
+**One flawed suggestion:** when designing the guardrail layer, an early AI suggestion was to have
+`validate_profile()` *auto-correct* contradictory profiles (e.g., silently reweight a profile with
+all-zero feature weights back to defaults) rather than just warn about them. I rejected this --
+silently overriding a user's stated preferences hides what the system is actually doing and makes
+its behavior harder to reason about. I kept the guardrail non-blocking and warning-only instead
+(see Future Work item 3), which is a more honest contract with the caller even though it means a
+"bad" profile can still produce a technically-valid-but-not-very-useful recommendation.
+
+**Limitations and future improvements:** the guardrail thresholds (e.g. `STRICT_TOLERANCE_THRESHOLD
+= 0.08`, `CONFLICTING_ENERGY_THRESHOLD = 0.70`) are hand-picked constants, not derived from the
+actual catalog's distribution -- section 6's energy-distribution bias means some of these
+thresholds may not generalize if the catalog grows or changes shape. The RAG explanation layer
+also has no automated check that Claude's output stays grounded beyond the prompt instruction
+itself; a stronger version would verify the generated text only references attributes present in
+the retrieved data before showing it to the user, rather than trusting the prompt alone.

@@ -9,6 +9,7 @@ RAG-generated natural language explanation (src/explain.py).
 
 import logging
 import os
+import sys
 
 try:
     from dotenv import load_dotenv
@@ -16,15 +17,19 @@ try:
 except ImportError:
     pass  # python-dotenv is optional; ANTHROPIC_API_KEY can also be set directly in the environment
 
-from src.recommender import load_songs, recommend_songs
-from src.explain import generate_explanation
+from src.recommender import load_songs_smart, recommend_songs
+from src.explain import generate_explanations_batch
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 logger = logging.getLogger(__name__)
 
 
 def main() -> None:
-    songs = load_songs("data/songs.csv")
+    try:
+        songs = load_songs_smart("data/songs.csv")
+    except RuntimeError as e:
+        print(f"\n{e}\n", file=sys.stderr)
+        sys.exit(1)
 
     # Refined taste profile with tolerance bands and feature weights
     user_prefs = {
@@ -73,7 +78,13 @@ def main() -> None:
     print("TOP 5 MUSIC RECOMMENDATIONS")
     print("="*70)
 
-    for idx, rec in enumerate(result.items, 1):
+    # AI explanations for the whole list are generated in a single Claude call
+    # (RAG over the catalog when a key is configured, else the same
+    # deterministic reasons rendered as prose for each song).
+    explain_items = [(song, score, reasons) for song, score, _, reasons in result.items]
+    ai_explanations = generate_explanations_batch(user_prefs, explain_items, songs)
+
+    for idx, (rec, ai_explanation) in enumerate(zip(result.items, ai_explanations), 1):
         song, score, explanation, reasons = rec
 
         # Song header
@@ -90,9 +101,6 @@ def main() -> None:
         for reason in reasons:
             print(f"     - {reason}")
 
-        # AI explanation (RAG over the catalog when a key is configured, else
-        # the same deterministic reasons rendered as prose)
-        ai_explanation = generate_explanation(user_prefs, song, score, reasons, songs)
         print(f"   AI Explanation: {ai_explanation}")
 
         print("-" * 70)

@@ -2,7 +2,7 @@
 
 ## Project Summary
 
-A small music recommender that scores a 17-song catalog against a user taste profile
+A small music recommender that scores a song catalog against a user taste profile
 (favorite genre/mood, target energy/valence/danceability, tolerance bands, feature weights)
 and returns ranked recommendations. It started as a Module 3 rule-based scoring exercise;
 this version extends it with two AI features that are fully integrated into the main
@@ -25,8 +25,11 @@ See [`system_diagram.md`](system_diagram.md) for the full component/data-flow di
 
 ## How The System Works
 
-Each song has: `id`, `title`, `artist`, `genre`, `mood`, `energy`, `tempo_bpm`, `valence`,
-`danceability`, `acousticness` (`data/songs.csv`).
+Each song has: `id`, `title`, `artist`, `genre`, `mood`, `energy`, `valence`,
+`danceability`, `acousticness`. The live app loads these from `data/songs.db` (SQLite),
+populated with real songs pulled from the MusicBrainz API -- see
+[Populating the catalog](#populating-the-catalog) below. `data/songs.csv` is a small fabricated
+example catalog kept only as a fixture for `tests/`; the app no longer reads it.
 
 Each user profile has: `favorite_genre`, `favorite_mood`, target values for `energy`/`valence`/
 `danceability`, a tolerance band per feature, per-feature `feature_weights`, an optional
@@ -109,6 +112,33 @@ For each recommended song, `generate_explanation()`:
    deterministic explanation instead. There is no free tier for the Claude API, but usage here
    is a handful of short calls per run and costs a small fraction of a cent each.
 
+### Populating the catalog
+
+The app reads its catalog exclusively from `data/songs.db` (SQLite) and will refuse to run
+with instructions instead of silently substituting fake data if that database is empty. Populate
+it with real songs from the [MusicBrainz API](https://musicbrainz.org/) (free, no API key needed):
+
+```bash
+python scripts/manage_songs.py import-musicbrainz rock --limit 25
+python scripts/manage_songs.py import-musicbrainz pop --limit 25
+python scripts/manage_songs.py list
+```
+
+Or bulk-import across all 27 genres at once:
+
+```bash
+python scripts/manage_songs.py import-musicbrainz-bulk --per-genre 100
+```
+
+Run single-genre import with any tag in `src/musicbrainz.py`'s `GENRE_FEATURE_ESTIMATES` to
+add more. You can also add a single song by hand (`manage_songs.py add ...`) or bulk-import from
+another CSV with the same columns as `data/songs.csv` (`manage_songs.py import-csv <path>`).
+
+**Data provenance:** title/artist/genre for MusicBrainz-sourced songs are real. MusicBrainz has no
+audio-analysis data at all, so `mood`/`energy`/`valence`/`danceability`/`acousticness`
+are rough, deterministic **genre-level estimates** (e.g. "metal" → high energy, low valence, low
+acousticness), not measured values — see the estimate table and reasoning in `src/musicbrainz.py`.
+
 ### Running the CLI
 
 ```bash
@@ -121,6 +151,14 @@ python -m src.main
 streamlit run app.py
 ```
 
+If `streamlit` isn't recognized as a command (common on Windows, especially with the Python
+Store install), run it as a module instead — this always works as long as `pip install -r
+requirements.txt` succeeded:
+
+```bash
+python -m streamlit run app.py
+```
+
 Lets you set your taste profile with sliders/selects (populated from the actual catalog) instead
 of editing the hardcoded profile in `main.py`, and includes a session-only password field to try
 a Claude API key without setting up `.env` at all.
@@ -131,9 +169,34 @@ a Claude API key without setting up `.env` at all.
 python -m pytest
 ```
 
-This runs the baseline profile tests (`tests/test_recommender.py`) and the full adversarial
-regression suite (`tests/test_adversarial.py`), which exercises all 8 edge-case profiles from
-`src/adversarial_profiles.py` against the real pipeline — 16 tests total.
+This runs the baseline profile tests (`tests/test_recommender.py`, exercising the real
+`score_song()`/`recommend_songs()` pipeline against the three listener archetypes in
+`src/test_profiles.py`) and the full adversarial regression suite (`tests/test_adversarial.py`),
+which exercises all 8 edge-case profiles from `src/adversarial_profiles.py` against the real
+pipeline — 21 tests total.
+
+### Running the Evaluation Harness
+
+In addition to the pytest suite, a standalone evaluation script runs the same baseline and
+adversarial profiles and prints a plain pass/fail summary without needing pytest installed:
+
+```bash
+python -m src.evaluate
+```
+
+```
+======================================================================
+MUSIC RECOMMENDER -- EVALUATION HARNESS
+======================================================================
+[PASS] baseline:High-Energy Pop Enthusiast -- baseline profile returns 5 ranked recommendations
+[PASS] baseline:HIGH_ENERGY_POP top match -- top result for a pop/happy profile is itself pop and happy
+[PASS] adversarial:PERFECTIONIST guardrail fires -- strict-tolerance warnings fire for all three numerical features
+[PASS] adversarial:ACOUSTIC_PARADOX guardrail fires -- acoustic/energy paradox warning fires when both are set
+...
+----------------------------------------------------------------------
+SUMMARY: 17/17 checks passed (100% confidence)
+----------------------------------------------------------------------
+```
 
 ---
 
@@ -172,6 +235,49 @@ TOP 5 MUSIC RECOMMENDATIONS
 deterministic fallback, since no API key is set in this example; with a key configured it reads
 as natural-language prose instead.)
 
+**A second example** — swapping in the `ACOUSTIC_PARADOX` adversarial profile
+(`likes_acoustic=True` with `target_energy=0.95`, from `src/adversarial_profiles.py`) shows the
+guardrail layer actually firing in the primary demo path, not just in tests:
+
+```
+======================================================================
+GUARDRAIL WARNINGS
+======================================================================
+  ! likes_acoustic=True with target_energy (0.95) is a paradox -- acoustic songs are typically
+    low-energy, so the acoustic bonus and the energy target will often conflict
+
+======================================================================
+TOP 5 MUSIC RECOMMENDATIONS
+======================================================================
+
+1. Sunrise City
+   Artist: Neon Echo | Genre: pop | Mood: happy
+   Score: 7.14/12.0 [#################-------------]
+   Why matched:
+     - mood match (+1.5)
+     - valence within range (+2.4)
+     - energy within range (+2.0)
+     - danceability within range (+1.2)
+   AI Explanation: mood match, valence within range, energy within range, danceability within range
+----------------------------------------------------------------------
+
+2. Morning Mist
+   Artist: Acoustic Wanderers | Genre: folk | Mood: nostalgic
+   Score: 7.00/12.0 [#################-------------]
+   Why matched:
+     - genre match (+2.0)
+     - valence within range (+1.2)
+     - energy within range (+1.2)
+     - danceability within range (+0.6)
+     - acoustic bonus (+2.0)
+   AI Explanation: genre match, valence within range, energy within range, danceability within range, acoustic bonus
+----------------------------------------------------------------------
+```
+
+Note the guardrail warning is correct: the acoustic bonus never actually lands on the top pick
+("Sunrise City" isn't acoustic) because no high-acousticness song in this catalog also hits a
+0.95 energy target — exactly the conflict the warning describes.
+
 ---
 
 ## Experiments You Tried
@@ -190,9 +296,14 @@ as natural-language prose instead.)
 
 ## Limitations and Risks
 
-- Tiny catalog (17 songs) — recommendations are only as good as what's in `data/songs.csv`, and
-  strict profiles can exhaust the meaningfully-different options quickly.
-- No understanding of lyrics, language, or actual audio — everything is numeric metadata.
+- Catalog size depends entirely on how much you've imported via `manage_songs.py`; a small or
+  narrow-genre catalog means strict profiles can exhaust the meaningfully-different options
+  quickly (see `model_card.md`'s evaluation history, captured against the original 17-song fixture).
+- No understanding of lyrics, language, or actual audio — everything is numeric metadata, and for
+  MusicBrainz-sourced songs that metadata (mood, energy, valence, danceability, acousticness) is
+  itself a rough genre-level *estimate*, not a measurement — see `src/musicbrainz.py`. Two songs in
+  the same genre get slightly different values (a small deterministic per-song nudge), but neither
+  reflects how that specific recording actually sounds.
 - The catalog's genre/energy distribution isn't balanced, so genres that are underrepresented (or
   paired with atypical energy/mood combinations) are structurally harder to satisfy — see
   `model_card.md` for specifics.
@@ -207,7 +318,9 @@ See [`model_card.md`](model_card.md) for the full evaluation history.
 ## Reflection
 
 Read [`model_card.md`](model_card.md) for the full write-up of what the adversarial testing
-surfaced, what was fixed, and what's left as future work.
+surfaced, what was fixed, and what's left as future work — including a dedicated section (§12)
+on how AI was used during development, one helpful and one flawed AI suggestion, and current
+system limitations.
 
 Building the guardrail layer made it clear how much of "recommender quality" is really about
 handling the profiles a system *shouldn't* have to handle gracefully — a contradictory or
